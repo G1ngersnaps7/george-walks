@@ -89,7 +89,11 @@ def monthly_average(sub, full_df):
         years = int(observed.get(m, 0))
         avg[MONTH_NAMES[m - 1]] = (total / years) if years > 0 else 0.0
 
-    return pd.Series(avg).reindex(MONTH_NAMES)
+    series = pd.Series(avg).reindex(MONTH_NAMES)
+    # Ordered categorical so the chart keeps calendar order, not alphabetical.
+    series.index = pd.Categorical(series.index, categories=MONTH_NAMES,
+                                  ordered=True)
+    return series
 
 
 # ── Colour generation ────────────────────────────────────────────────────────
@@ -362,7 +366,14 @@ def render_trends(df):
         .unstack(0)                       # years become columns
         .reindex(range(1, 13))            # all 12 months as rows
     )
-    yoy.index = [MONTH_NAMES[m - 1] for m in yoy.index]
+    # Use an ORDERED categorical for the month labels. Plain strings would let
+    # the chart re-sort them alphabetically (Apr, Aug, Dec…); an ordered
+    # categorical pins them to calendar order (Jan…Dec).
+    yoy.index = pd.Categorical(
+        [MONTH_NAMES[m - 1] for m in yoy.index],
+        categories=MONTH_NAMES,
+        ordered=True,
+    )
     yoy.columns = [str(c) for c in yoy.columns]   # year labels
     st.line_chart(yoy)
 
