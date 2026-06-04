@@ -318,7 +318,6 @@ def main():
                        layout="wide")
 
     st.title("George's Walk Log 🐕")
-    st.caption("Walks coloured by route cluster. Pick a route to focus on it.")
 
     df = load_walks()
 
@@ -326,6 +325,15 @@ def main():
         st.warning("No walks found in the database. "
                    "Run import_walks.py and cluster_walks.py first.")
         return
+
+    # Date range of the data, e.g. "Nov 2025 – Jun 2026"
+    span_start = df["dt"].min().strftime("%b %Y")
+    span_end = df["dt"].max().strftime("%b %Y")
+    if span_start == span_end:
+        date_range = span_start
+    else:
+        date_range = f"{span_start} – {span_end}"
+    st.caption(f"Walks coloured by route cluster · {date_range}")
 
     cluster_colors = make_cluster_colors(df["cluster_id"].unique())
 
