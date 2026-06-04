@@ -313,6 +313,60 @@ def render_stats_panel(df, cluster_id, colors):
 
 # ── Page ─────────────────────────────────────────────────────────────────────
 
+def render_trends(df):
+    """Render the Trends tab: timeline, distance, and year-over-year charts.
+
+    These operate on the full timeline (all years kept distinct), unlike the
+    monthly-rhythm chart which collapses years to show seasonal shape.
+    """
+    import pandas as pd
+
+    # A month-period column, e.g. 2024-01, used as the timeline x-axis.
+    # Using a Period keeps months ordered and gap-aware. Drop tz first to
+    # avoid a harmless conversion warning (month grouping is unaffected).
+    d = df.copy()
+    d["dt_naive"] = d["dt"].dt.tz_localize(None)
+    d["ym"] = d["dt_naive"].dt.to_period("M")
+
+    # Reindex onto a complete, gap-free run of months so a month with zero
+    # walks shows as a real zero rather than being silently skipped.
+    full_index = pd.period_range(d["ym"].min(), d["ym"].max(), freq="M")
+
+    # ── 1. Walks per month over time ─────────────────────────────────────────
+    st.write("**Walks per month**")
+    st.caption("How often you walked, across the whole timeline.")
+    walks_per_month = (
+        d.groupby("ym").size()
+        .reindex(full_index, fill_value=0)
+    )
+    walks_per_month.index = walks_per_month.index.astype(str)
+    st.bar_chart(walks_per_month)
+
+    # ── 2. Distance per month over time ──────────────────────────────────────
+    st.write("**Distance per month**")
+    st.caption("Total kilometres walked each month.")
+    dist_per_month = (
+        d.groupby("ym")["distance_km"].sum()
+        .reindex(full_index, fill_value=0.0)
+    )
+    dist_per_month.index = dist_per_month.index.astype(str)
+    st.bar_chart(dist_per_month)
+
+    # ── 3. Year-over-year monthly comparison ─────────────────────────────────
+    st.write("**Year-over-year**")
+    st.caption("Walks per month, one line per year — compare seasons "
+               "across years.")
+    yoy = (
+        d.groupby([d["dt"].dt.year, d["dt"].dt.month])
+        .size()
+        .unstack(0)                       # years become columns
+        .reindex(range(1, 13))            # all 12 months as rows
+    )
+    yoy.index = [MONTH_NAMES[m - 1] for m in yoy.index]
+    yoy.columns = [str(c) for c in yoy.columns]   # year labels
+    st.line_chart(yoy)
+
+
 def main():
     st.set_page_config(page_title="George's Walk Log", page_icon="🐕",
                        layout="wide")
@@ -346,42 +400,49 @@ def main():
     c2.metric("Route clusters", n_clusters)
     c3.metric("One-off walks", n_noise)
 
-    # ── Dropdown to choose focus ──────────────────────────────────────────────
-    # Build options: "All" plus each cluster (real clusters first, noise last)
-    cluster_ids = sorted(
-        df["cluster_id"].unique(),
-        key=lambda c: (c == -1, c),   # push -1 to the end
-    )
-    options = ["All routes"] + [
-        cluster_label(df, cid, cluster_colors) for cid in cluster_ids
-    ]
-    # Map the label back to its cluster_id
-    label_to_id = {"All routes": None}
-    for cid in cluster_ids:
-        label_to_id[cluster_label(df, cid, cluster_colors)] = cid
+    # ── Tabs: Map and Trends ──────────────────────────────────────────────────
+    map_tab, trends_tab = st.tabs(["🗺️ Map", "📈 Trends"])
 
-    choice = st.selectbox("Focus on a route", options)
-    selected_id = label_to_id[choice]
+    with map_tab:
+        # ── Dropdown to choose focus ─────────────────────────────────────────
+        cluster_ids = sorted(
+            df["cluster_id"].unique(),
+            key=lambda c: (c == -1, c),   # push -1 to the end
+        )
+        options = ["All routes"] + [
+            cluster_label(df, cid, cluster_colors) for cid in cluster_ids
+        ]
+        label_to_id = {"All routes": None}
+        for cid in cluster_ids:
+            label_to_id[cluster_label(df, cid, cluster_colors)] = cid
 
-    # ── Two-column layout: map left, stats right ──────────────────────────────
-    map_col, stats_col = st.columns([2, 1])
+        choice = st.selectbox("Focus on a route", options)
+        selected_id = label_to_id[choice]
 
-    with map_col:
-        fmap = build_map(df, cluster_colors, dim_others=selected_id)
-        st_folium(fmap, width=None, height=600, returned_objects=[])
+        # ── Two-column layout: map left, stats right ─────────────────────────
+        map_col, stats_col = st.columns([2, 1])
 
-    with stats_col:
-        if selected_id is None:
-            st.subheader("All routes")
-            st.metric("Total distance walked", f"{df['distance_km'].sum():.1f} km")
-            st.metric("Total time", f"{df['duration_min'].sum()/60:.1f} hours")
-            st.caption("Pick a specific route from the dropdown to see its "
-                       "stats and seasonality, and to name it.")
-            st.write("**Monthly rhythm (all walks)**")
-            st.caption("Average walks per month in a typical year")
-            st.bar_chart(monthly_average(df, df))
-        else:
-            render_stats_panel(df, selected_id, cluster_colors)
+        with map_col:
+            fmap = build_map(df, cluster_colors, dim_others=selected_id)
+            st_folium(fmap, width=None, height=600, returned_objects=[])
+
+        with stats_col:
+            if selected_id is None:
+                st.subheader("All routes")
+                st.metric("Total distance walked",
+                          f"{df['distance_km'].sum():.1f} km")
+                st.metric("Total time",
+                          f"{df['duration_min'].sum()/60:.1f} hours")
+                st.caption("Pick a specific route from the dropdown to see its "
+                           "stats and rhythm, and to name it.")
+                st.write("**Monthly rhythm (all walks)**")
+                st.caption("Average walks per month in a typical year")
+                st.bar_chart(monthly_average(df, df))
+            else:
+                render_stats_panel(df, selected_id, cluster_colors)
+
+    with trends_tab:
+        render_trends(df)
 
 
 if __name__ == "__main__":
