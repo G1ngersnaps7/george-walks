@@ -1,0 +1,29 @@
+# ── Data (keep private — contains home coordinates) ──────────────────
+gpx/
+*.gpx
+walks.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.python-version
+
+# ── Jupyter ──────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── macOS ────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── IDE / editor ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── Streamlit ────────────────────────────────────────────────────────
+.streamlit/secrets.toml

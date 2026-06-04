@@ -1,0 +1,6 @@
+rdp
+scikit-learn
+pandas
+streamlit
+folium
+streamlit-folium
