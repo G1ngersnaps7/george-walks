@@ -21,6 +21,12 @@ from rdp import rdp  # pip install rdp
 # ── Configuration ────────────────────────────────────────────────────────────
 
 GPX_FOLDER = "gpx"          # folder containing your .gpx files
+
+# Only import files whose name ends with this (before the .gpx extension).
+# The export app names walks like "2026-06-03_..._Walking.gpx", so this keeps
+# walks and ignores other workout types (running, cycling, etc.). The match is
+# case-insensitive. Set to "" to import every .gpx file regardless of type.
+FILENAME_SUFFIX = "Walking"
 DB_PATH    = "walks.db"     # SQLite database file
 
 # RDP tolerance: higher = more thinning. 0.0001 degrees ≈ ~10 metres.
@@ -302,12 +308,13 @@ def run_import():
         print("    Create a 'gpx/' folder next to this script and drop your files in.")
         return
 
+    suffix = (FILENAME_SUFFIX + ".gpx").lower()
     gpx_files = sorted(
-        f for f in os.listdir(GPX_FOLDER) if f.lower().endswith(".gpx")
+        f for f in os.listdir(GPX_FOLDER) if f.lower().endswith(suffix)
     )
 
     if not gpx_files:
-        print(f"No .gpx files found in '{GPX_FOLDER}/'.")
+        print(f"No '*{FILENAME_SUFFIX}.gpx' files found in '{GPX_FOLDER}/'.")
         return
 
     conn = sqlite3.connect(DB_PATH)
