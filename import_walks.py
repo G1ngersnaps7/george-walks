@@ -27,6 +27,19 @@ DB_PATH    = "walks.db"     # SQLite database file
 # At this tolerance a 2700-point walk typically thins to ~80–150 points.
 RDP_TOLERANCE = 0.0001
 
+# GPS outlier detection. A real signal dropout is a LARGE distance jump over
+# a short time (the tracker lost GPS and reconnected far away). We require BOTH
+# conditions before splitting a route:
+#   1. the step covers at least MIN_JUMP_METRES, AND
+#   2. it implies a speed above MAX_SPEED_KMH (or happens in zero time)
+# This distinction matters: ordinary GPS jitter wobbles a few metres between
+# readings, which over a 1-second interval can compute to a high "speed" even
+# though almost no distance was covered. Judging by speed alone wrongly splits
+# on that jitter; requiring a real distance jump as well only catches genuine
+# dropouts (like a tracker that teleported hundreds of metres).
+MAX_SPEED_KMH = 20.0     # speed ceiling for a normal-time step
+MIN_JUMP_METRES = 150.0  # a step must cover at least this far to count as a jump
+
 # GPX namespace used by the HealthExport app
 NS = {"gpx": "http://www.topografix.com/GPX/1/1"}
 
@@ -98,20 +111,57 @@ def parse_gpx(filepath):
 
     # ── Core metrics ──────────────────────────────────────────────────────────
 
-    duration_min = (times[-1] - times[0]).total_seconds() / 60.0
-    distance_km  = _total_distance_km(lats, lons)
-    elev_gain    = sum(max(0.0, eles[i] - eles[i-1]) for i in range(1, len(eles)))
-    elev_loss    = sum(max(0.0, eles[i-1] - eles[i]) for i in range(1, len(eles)))
-    avg_pace     = duration_min / distance_km if distance_km > 0 else 0.0
+    # ── Split the track at GPS dropouts ──────────────────────────────────────
+    # This removes impossible jumps from the distance total and lets us draw
+    # each clean segment separately (no straight line across signal gaps).
 
+    segments, n_jumps = _split_into_segments(
+        lats, lons, eles, times, MAX_SPEED_KMH
+    )
+
+    # ── Core metrics (computed within segments only) ─────────────────────────
+
+    duration_min = (times[-1] - times[0]).total_seconds() / 60.0
+
+    # Distance: sum within each segment, skipping the jumps between them.
+    distance_km = sum(
+        _total_distance_km(seg["lats"], seg["lons"])
+        for seg in segments if len(seg["lats"]) >= 2
+    )
+
+    # Elevation: also computed within segments, to avoid a fake spike at a jump.
+    elev_gain = 0.0
+    elev_loss = 0.0
+    for seg in segments:
+        e = seg["eles"]
+        elev_gain += sum(max(0.0, e[i] - e[i-1]) for i in range(1, len(e)))
+        elev_loss += sum(max(0.0, e[i-1] - e[i]) for i in range(1, len(e)))
+
+    avg_pace = duration_min / distance_km if distance_km > 0 else 0.0
+
+    # Centroid uses all points — a few outliers barely shift the average, and
+    # it keeps clustering stable.
     centroid_lat = sum(lats) / len(lats)
     centroid_lon = sum(lons) / len(lons)
 
-    # ── Thin the route for map display ───────────────────────────────────────
+    # ── Thin each segment for map display ─────────────────────────────────────
+    # route_json is now a LIST OF SEGMENTS: [ [[lat,lon],...], [[lat,lon],...] ]
+    # Each segment is thinned independently and drawn as its own polyline.
 
-    coords     = list(zip(lats, lons))
-    thinned    = rdp(coords, epsilon=RDP_TOLERANCE)
-    route_json = json.dumps([[round(lat, 6), round(lon, 6)] for lat, lon in thinned])
+    thinned_segments = []
+    for seg in segments:
+        coords = list(zip(seg["lats"], seg["lons"]))
+        if len(coords) < 2:
+            continue
+        thinned = rdp(coords, epsilon=RDP_TOLERANCE)
+        thinned_segments.append(
+            [[round(lat, 6), round(lon, 6)] for lat, lon in thinned]
+        )
+
+    route_json = json.dumps(thinned_segments)
+
+    if n_jumps:
+        print(f"(cleaned {n_jumps} GPS jump{'s' if n_jumps > 1 else ''}) ", end="")
 
     return {
         "date":             times[0].strftime("%Y-%m-%d"),
@@ -156,6 +206,62 @@ def _total_distance_km(lats, lons):
         _haversine_km(lats[i-1], lons[i-1], lats[i], lons[i])
         for i in range(1, len(lats))
     )
+
+
+def _split_into_segments(lats, lons, eles, times, max_speed_kmh):
+    """Split a track into clean segments at GPS dropouts.
+
+    A real dropout is a LARGE distance jump over a short time. The crucial
+    point is that ordinary GPS jitter wobbles only a few metres between
+    readings — but over a 1-second interval that small wobble can still
+    compute to a high "speed". So speed alone produces false splits on jitter.
+
+    We therefore require a genuine distance jump (>= MIN_JUMP_METRES) AS WELL
+    AS impossibility (too fast, or a leap in zero time) before splitting. A
+    6-metre wobble never splits; a 300-metre teleport does.
+
+    Returns a list of segments (each a dict of lats/lons/eles/times) and the
+    number of jumps found. The bogus jump between segments is excluded from
+    distance and never drawn on the map.
+    """
+    min_jump_km = MIN_JUMP_METRES / 1000.0
+
+    segments = []
+    seg_lats, seg_lons, seg_eles, seg_times = [lats[0]], [lons[0]], [eles[0]], [times[0]]
+    n_jumps = 0
+
+    for i in range(1, len(lats)):
+        gap_km = _haversine_km(lats[i-1], lons[i-1], lats[i], lons[i])
+        gap_hr = (times[i] - times[i-1]).total_seconds() / 3600.0
+
+        # A jump must FIRST be a real distance leap. Small wobble is never a
+        # jump, regardless of the implied speed.
+        if gap_km < min_jump_km:
+            is_jump = False
+        elif gap_hr > 0:
+            is_jump = (gap_km / gap_hr) > max_speed_kmh   # far AND fast
+        else:
+            is_jump = True                                # far AND zero-time
+
+        if is_jump:
+            segments.append({
+                "lats": seg_lats, "lons": seg_lons,
+                "eles": seg_eles, "times": seg_times,
+            })
+            seg_lats, seg_lons, seg_eles, seg_times = [], [], [], []
+            n_jumps += 1
+
+        seg_lats.append(lats[i])
+        seg_lons.append(lons[i])
+        seg_eles.append(eles[i])
+        seg_times.append(times[i])
+
+    segments.append({
+        "lats": seg_lats, "lons": seg_lons,
+        "eles": seg_eles, "times": seg_times,
+    })
+
+    return segments, n_jumps
 
 
 # ── Main import loop ──────────────────────────────────────────────────────────
