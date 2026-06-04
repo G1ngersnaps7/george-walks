@@ -22,11 +22,12 @@ from rdp import rdp  # pip install rdp
 
 GPX_FOLDER = "gpx"          # folder containing your .gpx files
 
-# Only import files whose name ends with this (before the .gpx extension).
-# The export app names walks like "2026-06-03_..._Walking.gpx", so this keeps
-# walks and ignores other workout types (running, cycling, etc.). The match is
-# case-insensitive. Set to "" to import every .gpx file regardless of type.
-FILENAME_SUFFIX = "Walking"
+# Only import files whose name ends with one of these activity types (before
+# the .gpx extension). The export app names files like
+# "2026-06-03_..._Walking.gpx", so this keeps the activity types you want and
+# ignores the rest (running, cycling, etc.). Matching is case-insensitive.
+# Set to [] (empty list) to import every .gpx file regardless of type.
+FILENAME_SUFFIXES = ["Walking", "Hiking"]
 DB_PATH    = "walks.db"     # SQLite database file
 
 # RDP tolerance: higher = more thinning. 0.0001 degrees ≈ ~10 metres.
@@ -308,13 +309,20 @@ def run_import():
         print("    Create a 'gpx/' folder next to this script and drop your files in.")
         return
 
-    suffix = (FILENAME_SUFFIX + ".gpx").lower()
+    # Build the set of allowed endings, e.g. ["walking.gpx", "hiking.gpx"].
+    # An empty FILENAME_SUFFIXES means "accept any .gpx".
+    if FILENAME_SUFFIXES:
+        allowed = tuple((s + ".gpx").lower() for s in FILENAME_SUFFIXES)
+    else:
+        allowed = (".gpx",)
+
     gpx_files = sorted(
-        f for f in os.listdir(GPX_FOLDER) if f.lower().endswith(suffix)
+        f for f in os.listdir(GPX_FOLDER) if f.lower().endswith(allowed)
     )
 
     if not gpx_files:
-        print(f"No '*{FILENAME_SUFFIX}.gpx' files found in '{GPX_FOLDER}/'.")
+        types = " / ".join(FILENAME_SUFFIXES) if FILENAME_SUFFIXES else "any"
+        print(f"No matching .gpx files ({types}) found in '{GPX_FOLDER}/'.")
         return
 
     conn = sqlite3.connect(DB_PATH)
